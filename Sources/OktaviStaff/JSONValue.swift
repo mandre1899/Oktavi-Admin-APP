@@ -80,3 +80,14 @@ extension JSONValue: Identifiable {
         return self["code"]?.string ?? self["slug"]?.string ?? String(hashValue)
     }
 }
+
+extension Optional where Wrapped == JSONValue {
+    /// True when the key exists and is not JSON `null`. API payloads often send `"return_id": null`,
+    /// which must count as "missing" for every workflow guard.
+    var isPresent: Bool {
+        switch self {
+        case .none, .some(.null): false
+        default: true
+        }
+    }
+}

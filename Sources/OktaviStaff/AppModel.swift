@@ -39,6 +39,11 @@ final class AppModel {
     private(set) var server: ServerAddress
 
     let keyStore = MemoryKeyStore()
+    /// Per-session state, recreated on every lock so nothing loaded survives it.
+    private(set) var navigator = StaffNavigator()
+    private(set) var queue = WorkQueue()
+    let references = ReferenceCache()
+    let images = ImageStore()
     let calendarSynchronizer = CalendarSynchronizer()
     private(set) var client: APIClient
     private let vault: CredentialVault
@@ -117,6 +122,10 @@ final class AppModel {
         inactivityTask?.cancel()
         Task { await keyStore.clear() }
         loadedDataClearers.values.forEach { $0() }
+        navigator = StaffNavigator()
+        queue = WorkQueue()
+        references.clear()
+        images.clear()
         if case .unlocked(let metadata) = authState { authState = .locked(metadata) }
     }
 
@@ -144,11 +153,12 @@ final class AppModel {
         self.hiddenAt = nil
     }
 
-    func handle(_ error: Error) {
-        if let apiError = error as? APIError, apiError.status == 401 {
-            Task { try? await removeCredential() }
-            errorMessage = "Schlüssel widerrufen oder abgelaufen; bitte einen neuen Schlüssel eingeben."
-        } else { errorMessage = error.localizedDescription }
+    /// Only a 401 is global: the key was revoked or expired, so lock and ask for a new one.
+    /// Every other error is shown inline by the screen that made the request.
+    func handleAuthFailure(_ error: Error) {
+        guard let apiError = error as? APIError, apiError.status == 401, case .unlocked = authState else { return }
+        Task { try? await removeCredential() }
+        errorMessage = "Schlüssel widerrufen oder abgelaufen; bitte einen neuen Schlüssel eingeben."
     }
 
     func registerDataClearer(_ clear: @escaping @MainActor () -> Void) -> UUID {

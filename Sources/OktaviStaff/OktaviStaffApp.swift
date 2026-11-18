@@ -9,7 +9,7 @@ struct OktaviStaffApp: App {
         WindowGroup("Oktavi Staff") {
             RootView()
                 .environment(model)
-                .frame(minWidth: 920, minHeight: 620)
+                .frame(minWidth: 1100, minHeight: 680)
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
                     case .active: model.sceneBecameActive()
@@ -26,6 +26,14 @@ struct OktaviStaffApp: App {
             CommandGroup(after: .appInfo) {
                 Button("App sperren") { model.lock() }.keyboardShortcut("l", modifiers: [.command, .shift])
             }
+            if case .unlocked = model.authState { NavigationCommands(model: model) }
+        }
+
+        Settings {
+            SettingsRoot()
+                .environment(model)
+                .frame(width: 520)
+                .frame(minHeight: 460)
         }
     }
 }
@@ -43,5 +51,17 @@ struct RootView: View {
             }
         }
         .animation(.default, value: model.authState)
+    }
+}
+
+private struct SettingsRoot: View {
+    @Environment(AppModel.self) private var model
+    var body: some View {
+        if case .unlocked(let metadata) = model.authState {
+            SettingsView(metadata: metadata)
+        } else {
+            ContentUnavailableView("App ist gesperrt", systemImage: "lock", description: Text("Entsperre Oktavi Staff, um die Einstellungen zu ändern."))
+                .padding(40)
+        }
     }
 }

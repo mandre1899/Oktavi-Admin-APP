@@ -41,6 +41,31 @@ swift test
   upcoming handovers, daily-rental pickups and returns, return appointments, and scheduled
   rental endings. It can run manually or whenever the app is unlocked.
 
+## Working with the app
+
+The sidebar follows the admin app's domains; every area is one click or shortcut away (menu **Gehe zu**,
+⌘1–⌘8, back/forward with ⌘[ and ⌘]).
+
+| Domain | Areas |
+|---|---|
+| Betrieb | Bestellungen (incl. handover and daily rental), Mieten, Rückgaben, Kündigungen |
+| Finanzen | Kautionen, Rechnungen (issue, void, write off, record payment), Zahlungen (refunds), Zahlungsversuche, Währungen |
+| Inventar & Logistik | Instrumententypen (photos, add instruments), Instrumente (status, master data, condition reports with photos), Lieferoptionen, Liefergebiete, Rückgabeoptionen, Mediathek |
+| Kundenservice | Kunden (addresses, history), Benutzerkonten (roles, two-factor reset) |
+| Rechtliches | Rechtstexte (versions, activate/deactivate) |
+
+- **Das steht an** lists alerts by urgency; each opens the list filtered to exactly those records. The
+  7-day agenda opens the order, return or rental directly.
+- Each detail shows the lifecycle, the **next step** as the primary button, and secondary actions;
+  destructive ones sit under "Weitere Aktionen". Problems link to where they are fixed, e.g. an order
+  item without stock opens its instrument type, where "Instrumente hinzufügen" is the next step.
+- ⌘R reloads everything, ⌘N creates a record in the current area, ⌘, opens the settings, ⇧⌘L locks.
+
+Routes deliberately not used: customer-only routes (checkout, `/my/*`, slot answers, invoice payment,
+OTP/2FA sign-in) and the legacy admin write routes that bypass the handover/return flow
+(`/fulfillments/*` writes, `/orders/:id/assignments`, `/orders/:id/start-rental`,
+`/admin/rental-returns/*`, `/rentals/:id/cancel`). `GET /orders/:id/fulfillments` is shown read-only.
+
 ## API prerequisite
 
 This repository did not include the `auth_api`, `ressource_api`, existing admin frontend,
