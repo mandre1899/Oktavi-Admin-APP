@@ -26,7 +26,8 @@ swift test
 
 ## Native security model
 
-- The API key is validated with `GET /auth/me` and must have the `admin` role.
+- The API key is validated with `GET /auth/me`; authorization for staff operations is
+  enforced by the protected `/api/v1/admin/*` endpoints.
 - Setup and unlock require the API domain each time. API keys must start with `okt_`;
   the server performs all further validation.
 - PBKDF2-HMAC-SHA-256 with 600,000 iterations derives an AES-256-GCM key from the

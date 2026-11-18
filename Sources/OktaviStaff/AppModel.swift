@@ -75,11 +75,6 @@ final class AppModel {
         try selectServer(domain)
         guard apiKey.hasPrefix("okt_") else { throw ValidationError("Der API-Schlüssel muss mit okt_ beginnen.") }
         let me = try await client.validate(key: apiKey)
-        let roles = me["roles"]?.array?.compactMap(\.string) ?? []
-        guard roles.contains("admin") else {
-            await keyStore.clear()
-            throw APIError(status: 403, code: "forbidden", message: "Keine Admin-Berechtigung.")
-        }
         let email = me["email"]?.string ?? "Admin"
         let metadata = VaultMetadata(prefix: String(apiKey.prefix(12)), email: email, createdAt: .now)
         try await vault.save(apiKey: apiKey, password: password, metadata: metadata, origin: server.url.absoluteString)
@@ -102,9 +97,6 @@ final class AppModel {
         do {
             await keyStore.set(key)
             guard let me = try await client.request("auth/me") else { throw URLError(.badServerResponse) }
-            guard me["roles"]?.array?.compactMap(\.string).contains("admin") == true else {
-                throw APIError(status: 403, code: "forbidden", message: "Keine Admin-Berechtigung.")
-            }
             failedUnlocks = 0
             retryAfter = nil
             let metadata = try await vault.metadata() ?? VaultMetadata(prefix: String(key.prefix(12)), email: me["email"]?.string ?? "Admin", createdAt: .now)

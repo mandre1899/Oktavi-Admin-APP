@@ -16,6 +16,9 @@ enum DashboardAlerts {
         func add(_ id: String, _ title: String, _ count: Int, _ tone: AlertTone, _ destination: StaffResource? = nil) {
             if count > 0 { alerts.append(StaffAlert(id: id, title: title, count: count, tone: tone, destination: destination)) }
         }
+        func isDaily(_ order: JSONValue) -> Bool {
+            (order["rental_term"]?.string ?? order["term"]?.string) == "short_term"
+        }
         let orders = list(sources["orders"])
         let deposits = list(sources["deposits"])
         let returns = list(sources["returns"])
@@ -32,13 +35,13 @@ enum DashboardAlerts {
         add("privacy-requests", "Datenschutzanfragen", activePrivacy.count, privacyTone)
         add("cancellations-open", "Offene Kündigungen", cancellations.filter { $0["status"]?.string == "open" }.count, .danger, .cancellations)
         add("handover-declined", "Abgelehnte Übergabetermine", orders.filter { $0["status"]?.string == "approved" && $0["handover_proposal_status"]?.string == "declined" }.count, .danger, .orders)
-        add("daily-overdue", "Überfällige Tagesmieten", orders.filter { $0["term"]?.string == "short_term" && $0["overdue_since"]?.string != nil }.count, .danger, .orders)
+        add("daily-overdue", "Überfällige Tagesmieten", orders.filter { isDaily($0) && $0["overdue_since"]?.string != nil }.count, .danger, .orders)
         add("orders-submitted", "Neue Bestellungen", orders.filter { $0["status"]?.string == "submitted" }.count, .warning, .orders)
         let formatter = DateFormatter(); formatter.calendar = Calendar(identifier: .gregorian); formatter.timeZone = TimeZone(identifier: "Europe/Berlin"); formatter.dateFormat = "yyyy-MM-dd"
         let tomorrow = formatter.date(from: today).flatMap { formatter.calendar.date(byAdding: .day, value: 1, to: $0) }.map(formatter.string) ?? today
-        add("daily-due", "Anstehende Tagesmieten", orders.filter { $0["term"]?.string == "short_term" && $0["status"]?.string == "approved" && ($0["rental_start_date"]?.string ?? "9999-99-99") <= tomorrow }.count, .warning, .orders)
-        add("daily-hold-lost", "Verlorene Mietreservierungen", orders.filter { $0["term"]?.string == "short_term" && $0["status"]?.string == "approved" && $0["rent_hold_lost"]?.bool == true }.count, .warning, .orders)
-        add("handover-unscheduled", "Übergaben ohne Termin", orders.filter { $0["term"]?.string != "short_term" && $0["status"]?.string == "approved" && $0["handover"] == nil && $0["handover_proposal_status"]?.string != "declined" }.count, .warning, .orders)
+        add("daily-due", "Anstehende Tagesmieten", orders.filter { isDaily($0) && $0["status"]?.string == "approved" && ($0["rental_start_date"]?.string ?? "9999-99-99") <= tomorrow }.count, .warning, .orders)
+        add("daily-hold-lost", "Verlorene Mietreservierungen", orders.filter { isDaily($0) && $0["status"]?.string == "approved" && $0["rent_hold_lost"]?.bool == true }.count, .warning, .orders)
+        add("handover-unscheduled", "Übergaben ohne Termin", orders.filter { !isDaily($0) && $0["status"]?.string == "approved" && $0["handover"] == nil && $0["handover_proposal_status"]?.string != "declined" }.count, .warning, .orders)
         add("returns-requested", "Rückgaben zu planen", returns.filter { $0["status"]?.string == "requested" && $0["appointment"] == nil }.count, .warning, .returns)
         add("returns-arrived", "Rückgaben zu prüfen", returns.filter { ["received", "checkup"].contains($0["status"]?.string ?? "") }.count, .warning, .returns)
         add("deposits-open", "Offene Kautionen", deposits.filter { $0["verification"]?.string == "manual" && ["pending", "submitted"].contains($0["status"]?.string ?? "") }.count, .warning, .deposits)

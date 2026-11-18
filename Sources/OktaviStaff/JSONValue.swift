@@ -74,6 +74,9 @@ enum JSONValue: Codable, Hashable, Sendable {
 
 extension JSONValue: Identifiable {
     var id: String {
-        self["id"]?.string ?? self["code"]?.string ?? self["slug"]?.string ?? String(hashValue)
+        for key in ["id", "order_id", "rental_id", "return_id", "deposit_id", "user_id", "cancellation_id", "payment_id", "invoice_id", "instrument_id", "order_item_id", "allocation_id", "proposal_id"] {
+            if let value = self[key]?.string { return value }
+        }
+        return self["code"]?.string ?? self["slug"]?.string ?? String(hashValue)
     }
 }

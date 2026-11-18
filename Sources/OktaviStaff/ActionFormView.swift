@@ -3,6 +3,7 @@ import SwiftUI
 struct ActionFormView: View {
     @Environment(\.dismiss) private var dismiss
     let action: WorkflowAction
+    let options: [String: [ActionChoice]]
     let perform: (String, JSONValue?) async throws -> Void
     @State private var values: [String: String] = [:]
     @State private var confirming = false
@@ -18,7 +19,7 @@ struct ActionFormView: View {
             if let error { Text(error).foregroundStyle(.red) }
             HStack { Spacer(); Button("Abbrechen") { dismiss() }; Button("Weiter") { confirming = true }.buttonStyle(.borderedProminent).disabled(working) }
         }
-        .padding(24).frame(minWidth: 500, minHeight: action.fields.isEmpty ? 220 : 360)
+        .padding(24).frame(minWidth: 520, minHeight: action.fields.isEmpty ? 220 : 380)
         .onAppear {
             for field in action.fields {
                 if case .dateTime = field.kind, field.required {
@@ -39,10 +40,30 @@ struct ActionFormView: View {
         case .toggle:
             Toggle(field.title, isOn: Binding(get: { values[field.id] == "true" }, set: { values[field.id] = $0 ? "true" : "false" }))
         case .choice(let options):
-            Picker(field.title, selection: binding(field.id)) { Text("Bitte wählen").tag(""); ForEach(options, id: \.self) { Text($0).tag($0) } }
+            Picker(field.title, selection: binding(field.id)) {
+                Text("Bitte wählen").tag("")
+                ForEach(options, id: \.self) { Text(StaffLabels.label($0)).tag($0) }
+            }
         case .dateTime:
             DatePicker(field.title, selection: dateBinding(field.id), displayedComponents: [.date, .hourAndMinute])
+        case .reference(let key):
+            let choices = self.choices(key: key)
+            if choices.isEmpty {
+                TextField("\(field.title) (ID)", text: binding(field.id))
+            } else {
+                Picker(field.title, selection: binding(field.id)) {
+                    Text("Bitte wählen").tag("")
+                    ForEach(choices) { choice in Text(choice.label).tag(choice.id) }
+                }
+            }
         }
+    }
+
+    private func choices(key: String) -> [ActionChoice] {
+        if key == "allocation_candidates" {
+            return options["allocation_candidates:\(values["order_item_id"] ?? "")"] ?? []
+        }
+        return options[key] ?? []
     }
 
     private func binding(_ key: String) -> Binding<String> { Binding(get: { values[key] ?? "" }, set: { values[key] = $0 }) }
