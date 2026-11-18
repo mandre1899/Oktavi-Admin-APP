@@ -74,9 +74,10 @@ struct APIClient: Sendable {
         return data.isEmpty ? nil : try JSONDecoder().decode(JSONValue.self, from: data)
     }
 
-    /// Image bytes for `/api/v1/media/:id` and `/api/v1/admin/media-files/:id/content`. Kept in memory only.
-    func data(_ path: String) async throws -> Data {
-        try await send(try await makeRequest(path, method: .get, query: [], accept: "image/*"))
+    /// Raw bytes: images for `/api/v1/media/:id` and `/api/v1/admin/media-files/:id/content` (kept in
+    /// memory only) and invoice PDFs for `/api/v1/admin/invoices/:id/pdf` (the bookkeeping export).
+    func data(_ path: String, accept: String = "image/*") async throws -> Data {
+        try await send(try await makeRequest(path, method: .get, query: [], accept: accept))
     }
 
     /// `multipart/form-data` upload with a single `file` field (condition and shop images).

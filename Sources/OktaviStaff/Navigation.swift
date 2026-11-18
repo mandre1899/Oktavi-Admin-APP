@@ -3,6 +3,8 @@ import Observation
 
 enum SidebarItem: Hashable {
     case dashboard, resource(StaffResource)
+    /// Buchhaltung: bulk export of invoice PDFs (Finanzen).
+    case accounting
 }
 
 struct RecordRef: Hashable {
@@ -46,11 +48,11 @@ final class StaffNavigator {
         move { section = .resource(resource); listPresets = presets; focus = filter; selectedRecord = nil }
     }
 
-    /// Jumps to a record. From the dashboard the record opens beside the agenda; elsewhere the
-    /// sidebar switches to the record's area.
+    /// Jumps to a record. From the dashboard the record opens beside the agenda (and an invoice beside
+    /// the Buchhaltung list); elsewhere the sidebar switches to the record's area.
     func openRecord(_ resource: StaffResource, id: String) {
         move {
-            if section != .dashboard, section != .resource(resource) {
+            if section != .dashboard, section != .resource(resource), !(section == .accounting && resource == .invoices) {
                 section = .resource(resource)
                 listPresets = [:]
                 focus = nil

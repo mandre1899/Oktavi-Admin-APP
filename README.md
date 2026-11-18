@@ -35,7 +35,8 @@ swift test
 - Only the encrypted envelope is persisted in the macOS Keychain. The plaintext key
   stays inside an actor-backed in-memory store while unlocked.
 - Networking uses an ephemeral `URLSession` without cookies or a URL cache. Every API
-  request sends `X-API-Key` and `Accept: application/json`.
+  request sends `X-API-Key` and `Accept: application/json` (`image/*` for photos,
+  `application/pdf` for invoice PDFs).
 - The app locks after ten minutes of inactivity or after being inactive for two minutes.
 - EventKit synchronization maintains a dedicated `Oktavi Staff` calendar. It contains handover and
   delivery slots only once the customer accepted them (title with customer and instrument, the delivery
@@ -48,12 +49,12 @@ swift test
 ## Working with the app
 
 The sidebar follows the admin app's domains; every area is one click or shortcut away (menu **Gehe zu**,
-⌘1–⌘8, back/forward with ⌘[ and ⌘]).
+⌘1–⌘9, back/forward with ⌘[ and ⌘]).
 
 | Domain | Areas |
 |---|---|
 | Betrieb | Bestellungen (incl. handover and daily rental), Mieten, Rückgaben, Kündigungen |
-| Finanzen | Kautionen, Rechnungen (issue, void, write off, record payment), Zahlungen (refunds), Zahlungsversuche, Währungen |
+| Finanzen | Kautionen, Rechnungen (issue, void, write off, record payment), Zahlungen (refunds), Zahlungsversuche, Währungen, Buchhaltung (PDF export) |
 | Inventar & Logistik | Instrumententypen (photos, add instruments), Instrumente (status, master data, condition reports with photos), Lieferoptionen, Liefergebiete, Rückgabeoptionen, Mediathek |
 | Kundenservice | Kunden (addresses, history), Benutzerkonten (roles, two-factor reset) |
 | Rechtliches | Rechtstexte (versions, activate/deactivate) |
@@ -63,6 +64,12 @@ The sidebar follows the admin app's domains; every area is one click or shortcut
 - Each detail shows the lifecycle, the **next step** as the primary button, and secondary actions;
   destructive ones sit under "Weitere Aktionen". Problems link to where they are fixed, e.g. an order
   item without stock opens its instrument type, where "Instrumente hinzufügen" is the next step.
+- **Buchhaltung** (⌘9) downloads every invoice issued in a period (last/this month, quarter, year, all, or a
+  custom range by Berlin issue date) as the PDF the server rendered (`GET /admin/invoices/:id/pdf`). It creates
+  a new folder such as `Rechnungen 2026-10-01 bis 2026-10-31` with one `<Rechnungsnummer>.pdf` per invoice and
+  `Rechnungsliste.csv` (semicolon-separated, UTF-8 with BOM, server amounts only). Drafts have no PDF and are
+  skipped; voided and uncollectible invoices are included. An invoice whose PDF is not rendered yet is listed
+  in the CSV and the result instead of aborting the export.
 - ⌘R reloads everything, ⌘N creates a record in the current area, ⌘, opens the settings, ⇧⌘L locks.
 
 Routes deliberately not used: customer-only routes (checkout, `/my/*`, slot answers, invoice payment,

@@ -15,6 +15,7 @@ struct StaffShellView: View {
                 switch navigator.section {
                 case .dashboard: DashboardView()
                 case .resource(let resource): ResourceListView(resource: resource).id(resource)
+                case .accounting: AccountingView()
                 case nil: ContentUnavailableView("Bereich auswählen", systemImage: "sidebar.left")
                 }
             }
@@ -71,6 +72,9 @@ private struct StaffSidebar: View {
             ForEach(StaffDomain.allCases) { domain in
                 Section(domain.title, isExpanded: expanded(domain)) {
                     ForEach(domain.resources) { row($0) }
+                    if domain == .finance {
+                        Label("Buchhaltung", systemImage: "archivebox").tag(SidebarItem.accounting)
+                    }
                 }
             }
         }
@@ -115,7 +119,9 @@ private struct StaffSidebar: View {
 private struct DetailPlaceholder: View {
     @Environment(StaffNavigator.self) private var navigator
     var body: some View {
-        if case .resource(let resource) = navigator.section {
+        if navigator.section == .accounting {
+            ContentUnavailableView("Rechnung auswählen", systemImage: "archivebox", description: Text("Zeitraum wählen, die gestellten Rechnungen prüfen und alle PDFs samt Rechnungsliste auf einmal in einen Ordner laden."))
+        } else if case .resource(let resource) = navigator.section {
             ContentUnavailableView("Eintrag auswählen", systemImage: resource.systemImage, description: Text("Wähle links einen Eintrag, um Details und den nächsten Schritt zu sehen."))
         } else {
             ContentUnavailableView("Hinweis oder Termin auswählen", systemImage: "checklist", description: Text("Ein Hinweis öffnet die passende gefilterte Liste, ein Termin direkt den Vorgang."))
@@ -142,6 +148,9 @@ struct NavigationCommands: Commands {
                         } else {
                             Button(resource.title) { model.navigator.select(.resource(resource)) }
                         }
+                    }
+                    if domain == .finance {
+                        Button("Buchhaltung") { model.navigator.select(.accounting) }.keyboardShortcut("9")
                     }
                 }
             }
