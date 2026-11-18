@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SetupView: View {
     @Environment(AppModel.self) private var model
+    @State private var domain = ""
     @State private var apiKey = ""
     @State private var password = ""
     @State private var confirmation = ""
@@ -17,9 +18,8 @@ struct SetupView: View {
                     .foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             Form {
-                Picker("Umgebung", selection: Binding(get: { model.environment }, set: { model.selectEnvironment($0) })) {
-                    ForEach(AppEnvironment.allCases) { Text($0.title).tag($0) }
-                }
+                TextField("Domain, z. B. dev.oktavi.de", text: $domain)
+                    .textContentType(.URL)
                 SecureField("API-Schlüssel", text: $apiKey)
                 SecureField("App-Passwort (mindestens 10 Zeichen)", text: $password)
                 SecureField("App-Passwort wiederholen", text: $confirmation)
@@ -36,7 +36,7 @@ struct SetupView: View {
     private func setup() async {
         working = true; error = nil
         defer { working = false }
-        do { try await model.setup(apiKey: apiKey.trimmingCharacters(in: .whitespacesAndNewlines), password: password) }
+        do { try await model.setup(apiKey: apiKey.trimmingCharacters(in: .whitespacesAndNewlines), password: password, domain: domain) }
         catch { self.error = error.localizedDescription }
     }
 }
@@ -44,32 +44,41 @@ struct SetupView: View {
 struct UnlockView: View {
     @Environment(AppModel.self) private var model
     let metadata: VaultMetadata
+    @State private var domain: String
     @State private var password = ""
     @State private var working = false
     @State private var error: String?
+
+    init(metadata: VaultMetadata) {
+        self.metadata = metadata
+        _domain = State(initialValue: "")
+    }
 
     var body: some View {
         VStack(spacing: 22) {
             Image(systemName: "lock.fill").font(.system(size: 48)).foregroundStyle(.tint)
             Text("Oktavi Staff").font(.largeTitle.bold())
             Text(metadata.email).foregroundStyle(.secondary)
+            TextField("Domain, z. B. dev.oktavi.de", text: $domain)
+                .textFieldStyle(.roundedBorder).frame(width: 340)
             SecureField("App-Passwort", text: $password)
                 .textFieldStyle(.roundedBorder).frame(width: 340)
                 .onSubmit { Task { await unlock() } }
             if let error { Text(error).foregroundStyle(.red) }
             Button("Entsperren") { Task { await unlock() } }
                 .buttonStyle(.borderedProminent).disabled(password.isEmpty || working || (model.retryAfter ?? .distantPast) > .now)
-            Text("Schlüssel \(metadata.prefix)… · \(model.environment.title)").font(.caption).foregroundStyle(.tertiary)
+            Text("Schlüssel \(metadata.prefix)…").font(.caption).foregroundStyle(.tertiary)
             if model.failedUnlocks >= 10 {
                 Button("Schlüssel von diesem Mac entfernen", role: .destructive) { Task { try? await model.removeCredential() } }
             }
-        }.padding(40)
+        }
+        .padding(40)
     }
 
     private func unlock() async {
         working = true; error = nil
         defer { working = false }
-        do { try await model.unlock(password: password) }
+        do { try await model.unlock(password: password, domain: domain) }
         catch { self.error = error.localizedDescription; password = "" }
     }
 }

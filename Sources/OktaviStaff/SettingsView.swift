@@ -15,7 +15,7 @@ struct SettingsView: View {
             Section("Anmeldung") {
                 LabeledContent("Benutzer", value: metadata.email)
                 LabeledContent("Schlüssel", value: metadata.prefix + "…")
-                LabeledContent("Umgebung", value: model.environment.title)
+                LabeledContent("Domain", value: model.server.domain)
                 Button("Jetzt sperren") { model.lock() }
             }
             Section("App-Passwort ändern") {

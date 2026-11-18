@@ -27,7 +27,8 @@ swift test
 ## Native security model
 
 - The API key is validated with `GET /auth/me` and must have the `admin` role.
-- Production accepts `okt_live_` keys; staging and local accept `okt_test_` keys.
+- Setup and unlock require the API domain each time. API keys must start with `okt_`;
+  the server performs all further validation.
 - PBKDF2-HMAC-SHA-256 with 600,000 iterations derives an AES-256-GCM key from the
   app password. The origin is authenticated as AAD.
 - Only the encrypted envelope is persisted in the macOS Keychain. The plaintext key

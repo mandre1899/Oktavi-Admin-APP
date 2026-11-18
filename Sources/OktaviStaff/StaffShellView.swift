@@ -32,7 +32,7 @@ struct StaffShellView: View {
                 HStack {
                     VStack(alignment: .leading) {
                         Text(metadata.email).lineLimit(1)
-                        Text(model.environment.title).font(.caption).foregroundStyle(.secondary)
+                        Text(model.server.domain).font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
                     Button { model.lock() } label: { Image(systemName: "lock") }.help("App sperren")

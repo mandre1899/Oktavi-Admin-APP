@@ -47,16 +47,10 @@ final class AppModel {
     private var loadedDataClearers: [UUID: @MainActor () -> Void] = [:]
 
     init(vault: CredentialVault = .shared) {
-        let fallback: String
-        switch UserDefaults.standard.string(forKey: "environment") {
-        case "staging": fallback = "https://dev.oktavi.de/"
-        case "local": fallback = "https://localhost/"
-        default: fallback = "https://oktavi.de/"
-        }
-        let saved = UserDefaults.standard.string(forKey: "serverOrigin") ?? fallback
-        server = (try? ServerAddress.parse(saved)) ?? ServerAddress(url: URL(string: "https://oktavi.de/")!)
+        let initialServer = ServerAddress(url: URL(string: "https://oktavi.de/")!)
+        server = initialServer
         self.vault = vault
-        client = APIClient(baseURL: server.url, keyStore: keyStore)
+        client = APIClient(baseURL: initialServer.url, keyStore: keyStore)
         Task { await loadState() }
     }
 
@@ -64,7 +58,6 @@ final class AppModel {
         let selected = try ServerAddress.parse(input)
         server = selected
         client = APIClient(baseURL: selected.url, keyStore: keyStore)
-        UserDefaults.standard.set(selected.url.absoluteString, forKey: "serverOrigin")
     }
 
     func loadState() async {
@@ -80,10 +73,7 @@ final class AppModel {
     func setup(apiKey: String, password: String, domain: String) async throws {
         guard password.count >= 10 else { throw ValidationError("Das App-Passwort muss mindestens 10 Zeichen lang sein.") }
         try selectServer(domain)
-        let host = server.url.host?.lowercased()
-        if host == "oktavi.de", !apiKey.hasPrefix("okt_live_") { throw ValidationError("Für oktavi.de ist ein Live-Schlüssel erforderlich.") }
-        if host == "dev.oktavi.de" || host == "localhost", !apiKey.hasPrefix("okt_test_") { throw ValidationError("Für diese Domain ist ein Test-Schlüssel erforderlich.") }
-        guard apiKey.hasPrefix("okt_live_") || apiKey.hasPrefix("okt_test_") else { throw ValidationError("Das Format des API-Schlüssels ist ungültig.") }
+        guard apiKey.hasPrefix("okt_") else { throw ValidationError("Der API-Schlüssel muss mit okt_ beginnen.") }
         let me = try await client.validate(key: apiKey)
         let roles = me["roles"]?.array?.compactMap(\.string) ?? []
         guard roles.contains("admin") else {
@@ -91,7 +81,7 @@ final class AppModel {
             throw APIError(status: 403, code: "forbidden", message: "Keine Admin-Berechtigung.")
         }
         let email = me["email"]?.string ?? "Admin"
-        let metadata = VaultMetadata(prefix: String(apiKey.prefix(12)), email: email, createdAt: .now, origin: server.url.absoluteString)
+        let metadata = VaultMetadata(prefix: String(apiKey.prefix(12)), email: email, createdAt: .now)
         try await vault.save(apiKey: apiKey, password: password, metadata: metadata, origin: server.url.absoluteString)
         authState = .unlocked(metadata)
         resetInactivityTimer()
@@ -117,7 +107,7 @@ final class AppModel {
             }
             failedUnlocks = 0
             retryAfter = nil
-            let metadata = try await vault.metadata() ?? VaultMetadata(prefix: String(key.prefix(12)), email: me["email"]?.string ?? "Admin", createdAt: .now, origin: server.url.absoluteString)
+            let metadata = try await vault.metadata() ?? VaultMetadata(prefix: String(key.prefix(12)), email: me["email"]?.string ?? "Admin", createdAt: .now)
             authState = .unlocked(metadata)
             resetInactivityTimer()
             synchronizeCalendarIfEnabled()
@@ -149,7 +139,8 @@ final class AppModel {
         guard new.count >= 10 else { throw ValidationError("Das neue Passwort muss mindestens 10 Zeichen lang sein.") }
         let key = try await vault.unlock(password: current, origin: server.url.absoluteString)
         guard let metadata = try await vault.metadata() else { throw VaultError.noCredential }
-        try await vault.save(apiKey: key, password: new, metadata: metadata, origin: server.url.absoluteString)
+        let sanitizedMetadata = VaultMetadata(prefix: metadata.prefix, email: metadata.email, createdAt: metadata.createdAt)
+        try await vault.save(apiKey: key, password: new, metadata: sanitizedMetadata, origin: server.url.absoluteString)
     }
 
     func userActivity() { if case .unlocked = authState { resetInactivityTimer() } }
