@@ -8,19 +8,19 @@ struct CalendarEventMapperTests {
 
     @Test func mapsScheduledHandover() throws {
         let order: JSONValue = .object([
-            "order_id": .string("order-1"), "order_number": .string("O-100"), "rental_term": .string("long_term"),
+            "order_id": .string("order-1"), "order_number": .string("O-100"), "rental_term": .string("long_term"), "status": .string("ready_for_fulfillment"),
             "customer": .object(["name": .string("Thilo Test")]),
-            "handover": .object(["start_at": .string("2026-12-01T09:00:00Z"), "end_at": .string("2026-12-01T10:00:00Z")])
+            "handover": .object(["status": .string("scheduled"), "start_at": .string("2026-12-01T09:00:00Z"), "end_at": .string("2026-12-01T10:00:00Z")])
         ])
         let events = CalendarEventMapper.events(sources: [.orders: [order]], now: now)
         #expect(events.count == 1)
         #expect(events[0].id == "order-order-1-handover")
-        #expect(events[0].title == "Übergabe Thilo Test")
+        #expect(events[0].title == "Übergabe: Thilo Test")
     }
 
     @Test func mapsAcceptedHandoverProposal() throws {
         let order: JSONValue = .object([
-            "id": .string("order-2"), "rental_term": .string("long_term"),
+            "id": .string("order-2"), "rental_term": .string("long_term"), "status": .string("approved"),
             "handover": .object(["proposals": .array([.object([
                 "status": .string("accepted"), "start_at": .string("2026-12-02T09:00:00Z"), "end_at": .string("2026-12-02T10:00:00Z")
             ])])])

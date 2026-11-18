@@ -47,6 +47,10 @@ struct StaffShellView: View {
             // Keeps badges and the dashboard current while the app stays open.
             while !Task.isCancelled {
                 await queue.load(client: model.client, onAuthFailure: model.handleAuthFailure)
+                // A slot the customer accepted in the shop shows up here at the latest after one refresh.
+                if model.calendarSynchronizer.canSyncSilently, let sources = queue.calendarSources {
+                    _ = try? await model.calendarSynchronizer.synchronize(client: model.client, sources: sources, interactive: false)
+                }
                 try? await Task.sleep(for: .seconds(300))
             }
         }

@@ -26,7 +26,7 @@ struct SettingsView: View {
                     .disabled(currentPassword.isEmpty || newPassword.count < 10 || newPassword != confirmation)
             }
             Section {
-                Toggle("Beim Entsperren automatisch synchronisieren", isOn: Binding(
+                Toggle("Automatisch synchronisieren", isOn: Binding(
                     get: { model.calendarSynchronizer.automaticSync },
                     set: { model.calendarSynchronizer.automaticSync = $0 }
                 ))
@@ -44,7 +44,7 @@ struct SettingsView: View {
             } header: {
                 Text("Kalender")
             } footer: {
-                Text("Erstellt und aktualisiert den Kalender „Oktavi Staff“ mit Übergaben, Tagesmiet-Abholungen und -Rückgaben, Rückgabeterminen und geplanten Mietenden. Entfernte Oktavi-Termine werden auch aus diesem Kalender entfernt.")
+                Text("Erstellt und aktualisiert den Kalender „Oktavi Staff“: vom Kunden bestätigte Übergabe- und Liefertermine (mit Kunde, Instrument und Lieferadresse), Tagesmiet-Abholungen und -Rückgaben, Rückgabetermine und geplante Mietenden. Mit automatischer Synchronisierung erscheint ein bestätigter Termin spätestens nach fünf Minuten. Entfernte oder ersetzte Termine verschwinden auch aus diesem Kalender.")
             }
             Section {
                 Button("Schlüssel von diesem Mac entfernen", role: .destructive) { confirmRemoval = true }

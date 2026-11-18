@@ -10,6 +10,8 @@ final class WorkQueue {
     private(set) var badges: [StaffResource: Int] = [:]
     private(set) var loading = false
     private(set) var lastUpdated: Date?
+    /// The lists the calendar needs, reused so a background sync does not fetch them again.
+    private(set) var calendarSources: [StaffResource: [JSONValue]]?
 
     private static let sources: [(name: String, label: String, path: String, query: [URLQueryItem])] = [
         ("orders", "Bestellungen", "api/v1/admin/orders", [.init(name: "limit", value: "100")]),
@@ -60,5 +62,11 @@ final class WorkQueue {
         ]).filter { $0.start <= weekAhead }
         failedSources = failures.sorted()
         lastUpdated = .now
+        let complete = values["orders"] != nil && values["returns"] != nil && values["rentals"] != nil
+        calendarSources = complete ? [
+            .orders: DashboardAlerts.list(values["orders"]),
+            .returns: DashboardAlerts.list(values["returns"]),
+            .rentals: DashboardAlerts.list(values["rentals"])
+        ] : nil
     }
 }

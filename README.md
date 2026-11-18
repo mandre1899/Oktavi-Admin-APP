@@ -37,9 +37,13 @@ swift test
 - Networking uses an ephemeral `URLSession` without cookies or a URL cache. Every API
   request sends `X-API-Key` and `Accept: application/json`.
 - The app locks after ten minutes of inactivity or after being inactive for two minutes.
-- EventKit synchronization maintains a dedicated `Oktavi Staff` calendar containing
-  upcoming handovers, daily-rental pickups and returns, return appointments, and scheduled
-  rental endings. It can run manually or whenever the app is unlocked.
+- EventKit synchronization maintains a dedicated `Oktavi Staff` calendar. It contains handover and
+  delivery slots only once the customer accepted them (title with customer and instrument, the delivery
+  address as location, contact and assigned serial numbers in the notes), daily-rental pickups and returns,
+  return appointments (pickup address as location) and scheduled rental endings. Slots that are pending,
+  declined, replaced or already handed over are removed. It runs manually, on unlock, and – with automatic
+  sync on and calendar access granted – after every dashboard refresh (every five minutes and after ⌘R),
+  writing only events that changed.
 
 ## Working with the app
 
