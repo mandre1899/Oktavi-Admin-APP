@@ -16,6 +16,7 @@ struct SettingsView: View {
                 LabeledContent("Benutzer", value: metadata.email)
                 LabeledContent("Schlüssel", value: metadata.prefix + "…")
                 LabeledContent("Domain", value: model.server.domain)
+                LabeledContent("Basic Auth", value: model.usesBasicAuth ? "Aktiv" : "Aus")
                 Button("Jetzt sperren") { model.lock() }
             }
             Section("App-Passwort ändern") {

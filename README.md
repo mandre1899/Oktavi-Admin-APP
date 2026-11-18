@@ -28,8 +28,19 @@ swift test
 
 - The API key is validated with `GET /auth/me`; authorization for staff operations is
   enforced by the protected `/api/v1/admin/*` endpoints.
-- Setup and unlock require the API domain each time. API keys must start with `okt_`;
-  the server performs all further validation.
+- The login screen asks for the environment each time (Produktion, Staging or a custom
+  domain); the choice is not stored. If this Mac holds a key for that environment it asks
+  for the app password, otherwise it sets one up. A stored key can be replaced from the
+  login screen; the old one stays until the new key is validated. API keys must start with
+  `okt_`; the server performs all further validation.
+- Optional HTTP basic auth (for a server behind Caddy's `basic_auth`, preselected for
+  Staging) is sent as `Authorization: Basic` with every request. Its username and password
+  are encrypted together with the API key. A basic-auth 401 (with a `WWW-Authenticate: Basic`
+  challenge) never removes the stored key; the login screen then asks for the basic-auth
+  login again and saves it once the server accepts it.
+- Each environment has its own Keychain item, named after a SHA-256 hash of the origin.
+  A key saved by older versions (one item for all environments) is moved to its
+  environment's item on the first successful unlock.
 - PBKDF2-HMAC-SHA-256 with 600,000 iterations derives an AES-256-GCM key from the
   app password. The origin is authenticated as AAD.
 - Only the encrypted envelope is persisted in the macOS Keychain. The plaintext key

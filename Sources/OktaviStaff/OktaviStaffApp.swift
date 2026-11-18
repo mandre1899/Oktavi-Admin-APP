@@ -44,9 +44,7 @@ struct RootView: View {
     var body: some View {
         Group {
             switch model.authState {
-            case .loading: ProgressView("Schlüsselbund wird geladen …")
-            case .setup: SetupView()
-            case .locked(let metadata): UnlockView(metadata: metadata)
+            case .signedOut: LoginView()
             case .unlocked(let metadata): StaffShellView(metadata: metadata)
             }
         }

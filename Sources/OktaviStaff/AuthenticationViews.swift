@@ -52,62 +52,279 @@ enum ServerPreset: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-enum AuthField: Hashable { case customDomain, apiKey, password, confirmation }
+enum AuthField: Hashable { case customDomain, basicUser, basicPassword, apiKey, password, confirmation }
 
-// MARK: - Setup
+// MARK: - Login
 
-struct SetupView: View {
+/// One screen for both cases: after picking an environment it unlocks that environment's key,
+/// or – if this Mac has none for it yet – sets one up.
+struct LoginView: View {
     @Environment(AppModel.self) private var model
     @State private var preset: ServerPreset?
     @State private var customDomain = ""
+    @State private var mode: Mode = .choose
+    @State private var refresh = 0
+    @State private var checkedDomain: String?
+    @FocusState private var focus: AuthField?
+
+    enum Mode: Equatable {
+        case choose, checking
+        case unlock(VaultMetadata, legacy: Bool)
+        /// `replacing` is the key already stored for this environment, kept until the new one is
+        /// validated and saved. `canCancel` returns to unlocking the stored key.
+        case setup(replacing: VaultMetadata?, canCancel: Bool)
+    }
+
+    private var domain: String? { preset?.resolvedDomain(custom: customDomain) }
+
+    private var isSetup: Bool { if case .setup = mode { true } else { false } }
+
+    var body: some View {
+        AuthScreen {
+            if isSetup {
+                AuthHeader(
+                    symbol: "key.viewfinder",
+                    title: "Oktavi Staff einrichten",
+                    subtitle: "Der API-Schlüssel wird mit deinem App-Passwort verschlüsselt im Schlüsselbund dieses Macs gespeichert – getrennt für jede Umgebung."
+                )
+            } else {
+                AuthHeader(symbol: "lock.fill", title: "Oktavi Staff", subtitle: "Wähle die Umgebung, mit der du arbeiten möchtest.")
+            }
+
+            AuthStep(number: 1, title: "Umgebung", done: domain != nil) {
+                ServerPicker(selection: $preset, customDomain: $customDomain, focus: $focus)
+            }
+
+            switch mode {
+            case .choose:
+                EmptyView()
+            case .checking:
+                ProgressView().controlSize(.small)
+            case .unlock(let metadata, let legacy):
+                UnlockSection(domain: domain ?? "", metadata: metadata, legacy: legacy, focus: $focus,
+                              onSetUpNew: { mode = .setup(replacing: legacy ? nil : metadata, canCancel: true) },
+                              onCredentialChanged: { refresh += 1 })
+                    .id(domain)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            case .setup(let replacing, let canCancel):
+                SetupSection(domain: domain ?? "", replacing: replacing, suggestBasicAuth: preset == .staging, focus: $focus,
+                             onCancel: canCancel ? { refresh += 1 } : nil,
+                             onCredentialChanged: { refresh += 1 })
+                    .id(domain)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.snappy, value: mode)
+        .task(id: "\(domain ?? "")#\(refresh)") { await checkCredential() }
+    }
+
+    private func checkCredential() async {
+        guard let domain else { mode = .choose; checkedDomain = nil; return }
+        if preset == .custom {
+            try? await Task.sleep(for: .milliseconds(300)) // still typing
+            guard !Task.isCancelled else { return }
+        }
+        if checkedDomain != domain { mode = .checking } // a re-check keeps the current screen
+        do {
+            let credential = try await model.credential(for: domain)
+            guard !Task.isCancelled else { return }
+            checkedDomain = domain
+            switch credential {
+            case .none:
+                mode = .setup(replacing: nil, canCancel: false)
+                if preset != .custom { focus = .apiKey }
+            case .stored(let metadata):
+                mode = .unlock(metadata, legacy: false)
+                if preset != .custom { focus = .password }
+            case .legacy(let metadata):
+                mode = .unlock(metadata, legacy: true)
+                if preset != .custom { focus = .password }
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            model.errorMessage = error.localizedDescription
+            mode = .choose
+        }
+    }
+}
+
+private struct UnlockSection: View {
+    @Environment(AppModel.self) private var model
+    let domain: String
+    let metadata: VaultMetadata
+    let legacy: Bool
+    let focus: FocusState<AuthField?>.Binding
+    let onSetUpNew: () -> Void
+    let onCredentialChanged: () -> Void
+    @State private var password = ""
+    @State private var working = false
+    @State private var error: String?
+    @State private var wrongPassword = false
+    @State private var confirmRemoval = false
+    @State private var showBasicAuth = false
+    @State private var basicUser = ""
+    @State private var basicPassword = ""
+
+    private var basicAuth: BasicAuthCredentials? {
+        showBasicAuth ? BasicAuthInput.credentials(username: basicUser, password: basicPassword) : nil
+    }
+
+    var body: some View {
+        VStack(spacing: 20) {
+            VStack(alignment: .leading, spacing: 8) {
+                AccountChip(email: metadata.email, prefix: metadata.prefix)
+                if legacy {
+                    FieldHint(text: "Dieser Schlüssel wurde vor der Umgebungsauswahl gespeichert und gehört vielleicht zu einer anderen Umgebung.", state: .warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            AuthStep(number: 2, title: "App-Passwort", done: false) {
+                RevealableSecureField(title: "App-Passwort", text: $password, focus: focus, field: .password) {
+                    Task { await unlock() }
+                }
+                CapsLockWarning()
+            }
+
+            if showBasicAuth {
+                BasicAuthBox(enabled: .constant(true), username: $basicUser, password: $basicPassword, focus: focus,
+                             note: "Wird nach erfolgreicher Anmeldung mit dem Schlüssel verschlüsselt gespeichert.") {
+                    Task { await unlock() }
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            if let error {
+                ErrorBanner(message: error, detail: wrongPassword && legacy
+                    ? "Wähle die Umgebung, für die der Schlüssel eingerichtet wurde – oder richte hier einen neuen ein."
+                    : nil)
+            }
+
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let remaining = model.retryAfter.map { Int($0.timeIntervalSince(context.date).rounded(.up)) } ?? 0
+                VStack(spacing: 8) {
+                    PrimaryButton(
+                        title: remaining > 0 ? "Bitte \(remaining) s warten" : "Entsperren",
+                        working: working,
+                        disabled: password.isEmpty || working || remaining > 0 || (showBasicAuth && basicAuth == nil)
+                    ) { Task { await unlock() } }
+                    if model.failedUnlocks > 0 && remaining <= 0 {
+                        Text("\(model.failedUnlocks) Fehlversuch\(model.failedUnlocks == 1 ? "" : "e")")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            HStack(spacing: 16) {
+                Button("Neuen Schlüssel für \(domain) einrichten") { onSetUpNew() }
+                    .buttonStyle(.link)
+                if model.failedUnlocks >= 10 {
+                    Button("Schlüssel entfernen …", role: .destructive) { confirmRemoval = true }
+                        .buttonStyle(.link).foregroundStyle(.red)
+                }
+            }
+            .font(.callout)
+        }
+        .animation(.snappy, value: showBasicAuth)
+        .confirmationDialog("Schlüssel entfernen?", isPresented: $confirmRemoval) {
+            Button("Schlüssel entfernen", role: .destructive) {
+                Task {
+                    try? await model.removeCredential(domain: domain)
+                    onCredentialChanged()
+                }
+            }
+        } message: {
+            Text("Der verschlüsselte API-Schlüssel für \(domain) wird aus dem Schlüsselbund gelöscht. Danach muss die Umgebung neu eingerichtet werden.")
+        }
+    }
+
+    private func unlock() async {
+        guard !password.isEmpty, !working, !showBasicAuth || basicAuth != nil else { return }
+        working = true; error = nil; wrongPassword = false
+        defer { working = false }
+        do { try await model.unlock(password: password, domain: domain, basicAuth: basicAuth) }
+        catch {
+            self.error = error.localizedDescription
+            if let basicAuthError = error as? BasicAuthError {
+                // The app password was right; only the server's basic-auth login is missing or wrong.
+                showBasicAuth = true
+                focus.wrappedValue = basicAuthError == .rejected && !basicUser.isEmpty ? .basicPassword : .basicUser
+                return
+            }
+            if case VaultError.wrongPassword = error { wrongPassword = true }
+            password = ""
+            focus.wrappedValue = .password
+            if let apiError = error as? APIError, apiError.status == 401 { onCredentialChanged() } // revoked key was removed
+        }
+    }
+}
+
+private struct SetupSection: View {
+    @Environment(AppModel.self) private var model
+    let domain: String
+    let replacing: VaultMetadata?
+    let suggestBasicAuth: Bool
+    let focus: FocusState<AuthField?>.Binding
+    let onCancel: (() -> Void)?
+    let onCredentialChanged: () -> Void
+    @State private var useBasicAuth = false
+    @State private var basicUser = ""
+    @State private var basicPassword = ""
     @State private var apiKey = ""
     @State private var password = ""
     @State private var confirmation = ""
     @State private var working = false
     @State private var error: String?
-    @FocusState private var focus: AuthField?
 
-    private var domain: String? { preset?.resolvedDomain(custom: customDomain) }
     private var trimmedKey: String { apiKey.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var keyLooksValid: Bool { trimmedKey.hasPrefix("okt_") && trimmedKey.count > 4 }
     private var passwordLongEnough: Bool { password.count >= 10 }
     private var passwordsMatch: Bool { !confirmation.isEmpty && password == confirmation }
-    private var canSubmit: Bool { domain != nil && keyLooksValid && passwordLongEnough && passwordsMatch && !working }
+    private var basicAuth: BasicAuthCredentials? {
+        useBasicAuth ? BasicAuthInput.credentials(username: basicUser, password: basicPassword) : nil
+    }
+    private var basicAuthReady: Bool { !useBasicAuth || basicAuth != nil }
+    private var canSubmit: Bool { keyLooksValid && passwordLongEnough && passwordsMatch && basicAuthReady && !working }
 
     var body: some View {
-        AuthScreen {
-            AuthHeader(
-                symbol: "key.viewfinder",
-                title: "Oktavi Staff einrichten",
-                subtitle: "Der API-Schlüssel wird mit deinem App-Passwort verschlüsselt im Schlüsselbund dieses Macs gespeichert."
-            )
-
-            AuthStep(number: 1, title: "Umgebung wählen", done: domain != nil) {
-                ServerPicker(selection: $preset, customDomain: $customDomain, focus: $focus)
+        VStack(spacing: 20) {
+            if let replacing {
+                FieldHint(
+                    text: "Ersetzt den Schlüssel \(replacing.prefix)… für \(domain), sobald der neue geprüft ist.",
+                    state: .warning
+                )
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else if onCancel == nil {
+                FieldHint(text: "Für \(domain) ist auf diesem Mac noch kein Schlüssel gespeichert.", state: .neutral)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            if domain != nil {
-                AuthStep(number: 2, title: "API-Schlüssel", done: keyLooksValid) {
-                    RevealableSecureField(title: "okt_…", text: $apiKey, focus: $focus, field: .apiKey) {
-                        if keyLooksValid { focus = .password }
-                    }
-                    if !trimmedKey.isEmpty && !trimmedKey.hasPrefix("okt_") {
-                        FieldHint(text: "Der Schlüssel muss mit okt_ beginnen.", state: .problem)
-                    }
+            BasicAuthBox(enabled: $useBasicAuth, username: $basicUser, password: $basicPassword, focus: focus,
+                         note: "Wird zusammen mit dem API-Schlüssel verschlüsselt gespeichert.") {
+                focus.wrappedValue = .apiKey
+            }
+
+            AuthStep(number: 2, title: "API-Schlüssel", done: keyLooksValid) {
+                RevealableSecureField(title: "okt_…", text: $apiKey, focus: focus, field: .apiKey) {
+                    if keyLooksValid { focus.wrappedValue = .password }
                 }
-                .transition(.move(edge: .top).combined(with: .opacity))
+                if !trimmedKey.isEmpty && !trimmedKey.hasPrefix("okt_") {
+                    FieldHint(text: "Der Schlüssel muss mit okt_ beginnen.", state: .problem)
+                }
             }
 
-            if domain != nil && keyLooksValid {
+            if keyLooksValid {
                 AuthStep(number: 3, title: "App-Passwort festlegen", done: passwordLongEnough && passwordsMatch) {
-                    RevealableSecureField(title: "App-Passwort", text: $password, focus: $focus, field: .password) {
-                        if passwordLongEnough { focus = .confirmation }
+                    RevealableSecureField(title: "App-Passwort", text: $password, focus: focus, field: .password) {
+                        if passwordLongEnough { focus.wrappedValue = .confirmation }
                     }
                     FieldHint(
                         text: passwordLongEnough ? "Mindestens 10 Zeichen" : "Mindestens 10 Zeichen (noch \(10 - password.count))",
                         state: password.isEmpty ? .neutral : (passwordLongEnough ? .ok : .problem)
                     )
-                    RevealableSecureField(title: "App-Passwort wiederholen", text: $confirmation, focus: $focus, field: .confirmation) {
+                    RevealableSecureField(title: "App-Passwort wiederholen", text: $confirmation, focus: focus, field: .confirmation) {
                         if canSubmit { Task { await setup() } }
                     }
                     if !confirmation.isEmpty {
@@ -126,111 +343,88 @@ struct SetupView: View {
             PrimaryButton(title: "Schlüssel prüfen und speichern", working: working, disabled: !canSubmit) {
                 Task { await setup() }
             }
+
+            if let onCancel {
+                Button("Abbrechen – gespeicherten Schlüssel verwenden") { onCancel() }
+                    .buttonStyle(.link).font(.callout)
+            }
         }
-        .animation(.snappy, value: domain != nil)
         .animation(.snappy, value: keyLooksValid)
-        .onChange(of: domain) { old, new in
-            if old == nil, new != nil, preset != .custom { focus = .apiKey }
-        }
+        .onAppear { if suggestBasicAuth { useBasicAuth = true } }
         .onChange(of: keyLooksValid) { _, valid in
-            if valid, focus == .apiKey, apiKey.count > 12 { focus = .password } // pasted key
+            if valid, focus.wrappedValue == .apiKey, apiKey.count > 12 { focus.wrappedValue = .password } // pasted key
         }
     }
 
     private func setup() async {
-        guard canSubmit, let domain else { return }
+        guard canSubmit else { return }
         working = true; error = nil
         defer { working = false }
-        do { try await model.setup(apiKey: trimmedKey, password: password, domain: domain) }
-        catch { self.error = error.localizedDescription }
+        do { try await model.setup(apiKey: trimmedKey, basicAuth: basicAuth, password: password, domain: domain) }
+        catch {
+            self.error = error.localizedDescription
+            if let basicAuthError = error as? BasicAuthError {
+                useBasicAuth = true
+                focus.wrappedValue = basicAuthError == .rejected && !basicUser.isEmpty ? .basicPassword : .basicUser
+            }
+        }
     }
 }
 
-// MARK: - Unlock
+// MARK: - Basic auth
 
-struct UnlockView: View {
-    @Environment(AppModel.self) private var model
-    let metadata: VaultMetadata
-    @State private var preset: ServerPreset?
-    @State private var customDomain = ""
-    @State private var password = ""
-    @State private var working = false
-    @State private var error: String?
-    @State private var wrongPassword = false
-    @State private var confirmRemoval = false
-    @FocusState private var focus: AuthField?
+enum BasicAuthInput {
+    /// Complete credentials, or `nil` while a field is empty or the username contains a colon
+    /// (which basic auth cannot carry).
+    static func credentials(username: String, password: String) -> BasicAuthCredentials? {
+        let user = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !user.isEmpty, !password.isEmpty, !user.contains(":") else { return nil }
+        return BasicAuthCredentials(username: user, password: password)
+    }
+}
 
-    init(metadata: VaultMetadata) { self.metadata = metadata }
-
-    private var domain: String? { preset?.resolvedDomain(custom: customDomain) }
+/// Optional login for a server behind HTTP basic auth (for example Caddy's `basic_auth`).
+private struct BasicAuthBox: View {
+    @Binding var enabled: Bool
+    @Binding var username: String
+    @Binding var password: String
+    let focus: FocusState<AuthField?>.Binding
+    let note: String
+    var onSubmit: () -> Void = {}
 
     var body: some View {
-        AuthScreen {
-            AuthHeader(symbol: "lock.fill", title: "Oktavi Staff", subtitle: nil)
-            AccountChip(email: metadata.email, prefix: metadata.prefix)
-
-            AuthStep(number: nil, title: "Umgebung", done: domain != nil) {
-                ServerPicker(selection: $preset, customDomain: $customDomain, focus: $focus)
-            }
-
-            if domain != nil {
-                AuthStep(number: nil, title: "App-Passwort", done: false) {
-                    RevealableSecureField(title: "App-Passwort", text: $password, focus: $focus, field: .password) {
-                        Task { await unlock() }
-                    }
-                    CapsLockWarning()
-                }
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
-
-            if let error {
-                ErrorBanner(message: error, detail: wrongPassword
-                    ? "Stimmt die Umgebung? Der Schlüssel lässt sich nur mit der Umgebung entsperren, für die er eingerichtet wurde."
-                    : nil)
-            }
-
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                let remaining = model.retryAfter.map { Int($0.timeIntervalSince(context.date).rounded(.up)) } ?? 0
-                VStack(spacing: 8) {
-                    PrimaryButton(
-                        title: remaining > 0 ? "Bitte \(remaining) s warten" : "Entsperren",
-                        working: working,
-                        disabled: domain == nil || password.isEmpty || working || remaining > 0
-                    ) { Task { await unlock() } }
-                    if model.failedUnlocks > 0 && remaining <= 0 {
-                        Text("\(model.failedUnlocks) Fehlversuch\(model.failedUnlocks == 1 ? "" : "e")")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle(isOn: $enabled.animation(.snappy)) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label("Basic Auth", systemImage: "person.badge.key.fill").font(.callout.weight(.semibold))
+                    Text("Der Server ist zusätzlich mit Benutzername und Passwort geschützt, z. B. durch Caddy.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .toggleStyle(.switch)
+            .onChange(of: enabled) { _, on in if on { focus.wrappedValue = .basicUser } }
 
-            if model.failedUnlocks >= 10 {
-                Button("Schlüssel von diesem Mac entfernen …", role: .destructive) { confirmRemoval = true }
-                    .buttonStyle(.link).foregroundStyle(.red)
-                    .confirmationDialog("Schlüssel entfernen?", isPresented: $confirmRemoval) {
-                        Button("Schlüssel entfernen", role: .destructive) { Task { try? await model.removeCredential() } }
-                    } message: {
-                        Text("Der verschlüsselte API-Schlüssel wird aus dem Schlüsselbund gelöscht. Danach muss Oktavi Staff neu eingerichtet werden.")
-                    }
+            if enabled {
+                AuthFieldChrome(focused: focus.wrappedValue == .basicUser) {
+                    TextField("Benutzername", text: $username)
+                        .textFieldStyle(.plain)
+                        .textContentType(.username)
+                        .autocorrectionDisabled()
+                        .focused(focus, equals: .basicUser)
+                        .onSubmit { focus.wrappedValue = .basicPassword }
+                }
+                RevealableSecureField(title: "Passwort", text: $password, focus: focus, field: .basicPassword, onSubmit: onSubmit)
+                if username.contains(":") {
+                    FieldHint(text: "Der Benutzername darf keinen Doppelpunkt enthalten.", state: .problem)
+                } else {
+                    FieldHint(text: note, state: .neutral).fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
-        .animation(.snappy, value: domain != nil)
-        .onChange(of: domain) { old, new in
-            if old == nil, new != nil, preset != .custom { focus = .password }
-        }
-    }
-
-    private func unlock() async {
-        guard let domain, !password.isEmpty, !working else { return }
-        working = true; error = nil; wrongPassword = false
-        defer { working = false }
-        do { try await model.unlock(password: password, domain: domain) }
-        catch {
-            if case VaultError.wrongPassword = error { wrongPassword = true }
-            self.error = error.localizedDescription
-            password = ""
-            focus = .password
-        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
     }
 }
 

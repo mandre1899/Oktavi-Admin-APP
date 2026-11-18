@@ -33,11 +33,34 @@ enum ErrorTranslations {
     }
 }
 
+/// HTTP basic auth in front of the API (for example Caddy's `basic_auth`), sent with every request.
+struct BasicAuthCredentials: Codable, Equatable, Sendable {
+    let username: String
+    let password: String
+
+    var headerValue: String { "Basic " + Data("\(username):\(password)".utf8).base64EncodedString() }
+}
+
+/// The server's basic-auth wall refused the request. Unlike a 401 from the API, it says
+/// nothing about the API key, so it never removes the stored key.
+enum BasicAuthError: LocalizedError, Equatable {
+    case required, rejected
+
+    var errorDescription: String? {
+        switch self {
+        case .required: "Der Server ist mit Basic Auth geschützt. Bitte Benutzername und Passwort angeben."
+        case .rejected: "Benutzername oder Passwort für Basic Auth ist falsch."
+        }
+    }
+}
+
 actor MemoryKeyStore {
     private var key: String?
-    func set(_ value: String) { key = value }
+    private var basicAuth: BasicAuthCredentials?
+    func set(_ value: String, basicAuth: BasicAuthCredentials? = nil) { key = value; self.basicAuth = basicAuth }
     func get() -> String? { key }
-    func clear() { key = nil }
+    func basicAuthCredentials() -> BasicAuthCredentials? { basicAuth }
+    func clear() { key = nil; basicAuth = nil }
 }
 
 struct APIClient: Sendable {
@@ -116,18 +139,26 @@ struct APIClient: Sendable {
         request.httpMethod = method.rawValue
         request.setValue(accept, forHTTPHeaderField: "Accept")
         request.setValue(key, forHTTPHeaderField: "X-API-Key")
+        if let basicAuth = await keyStore.basicAuthCredentials() {
+            request.setValue(basicAuth.headerValue, forHTTPHeaderField: "Authorization")
+        }
         return request
     }
 
     private func send(_ request: URLRequest) async throws -> Data {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        if http.statusCode == 401,
+           let challenge = http.value(forHTTPHeaderField: "WWW-Authenticate"),
+           challenge.lowercased().hasPrefix("basic") {
+            throw request.value(forHTTPHeaderField: "Authorization") == nil ? BasicAuthError.required : BasicAuthError.rejected
+        }
         guard (200..<300).contains(http.statusCode) else { throw Self.decodeError(data: data, status: http.statusCode) }
         return data
     }
 
-    func validate(key: String) async throws -> JSONValue {
-        await keyStore.set(key)
+    func validate(key: String, basicAuth: BasicAuthCredentials? = nil) async throws -> JSONValue {
+        await keyStore.set(key, basicAuth: basicAuth)
         do {
             guard let response = try await request("auth/me") else { throw URLError(.badServerResponse) }
             return response

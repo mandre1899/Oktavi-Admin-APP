@@ -28,15 +28,18 @@ struct ServerAddress: Equatable, Sendable {
     }
 }
 
-enum AuthenticationState: Equatable { case loading, setup, locked(VaultMetadata), unlocked(VaultMetadata) }
+/// Signed out means the login screen: pick an environment, then unlock its key or set one up.
+enum AuthenticationState: Equatable { case signedOut, unlocked(VaultMetadata) }
 
 @MainActor @Observable
 final class AppModel {
-    private(set) var authState: AuthenticationState = .loading
+    private(set) var authState: AuthenticationState = .signedOut
     var errorMessage: String?
     var failedUnlocks = 0
     var retryAfter: Date?
     private(set) var server: ServerAddress
+    /// Whether the unlocked environment is reached through basic auth (shown in the settings).
+    private(set) var usesBasicAuth = false
 
     let keyStore = MemoryKeyStore()
     /// Per-session state, recreated on every lock so nothing loaded survives it.
@@ -56,7 +59,6 @@ final class AppModel {
         server = initialServer
         self.vault = vault
         client = APIClient(baseURL: initialServer.url, keyStore: keyStore)
-        Task { await loadState() }
     }
 
     func selectServer(_ input: String) throws {
@@ -65,54 +67,60 @@ final class AppModel {
         client = APIClient(baseURL: selected.url, keyStore: keyStore)
     }
 
-    func loadState() async {
-        do {
-            if let metadata = try await vault.metadata() { authState = .locked(metadata) }
-            else { authState = .setup }
-        } catch {
-            errorMessage = error.localizedDescription
-            authState = .setup
-        }
+    /// What this Mac holds for an environment, which decides between unlock and setup.
+    func credential(for domain: String) async throws -> StoredCredential {
+        try await vault.credential(origin: ServerAddress.parse(domain).url.absoluteString)
     }
 
-    func setup(apiKey: String, password: String, domain: String) async throws {
+    func setup(apiKey: String, basicAuth: BasicAuthCredentials?, password: String, domain: String) async throws {
         guard password.count >= 10 else { throw ValidationError("Das App-Passwort muss mindestens 10 Zeichen lang sein.") }
         try selectServer(domain)
         guard apiKey.hasPrefix("okt_") else { throw ValidationError("Der API-Schlüssel muss mit okt_ beginnen.") }
-        let me = try await client.validate(key: apiKey)
+        let me = try await client.validate(key: apiKey, basicAuth: basicAuth)
         let email = me["email"]?.string ?? "Admin"
         let metadata = VaultMetadata(prefix: String(apiKey.prefix(12)), email: email, createdAt: .now)
-        try await vault.save(apiKey: apiKey, password: password, metadata: metadata, origin: server.url.absoluteString)
+        try await vault.save(apiKey: apiKey, basicAuth: basicAuth, password: password, metadata: metadata, origin: server.url.absoluteString)
+        usesBasicAuth = basicAuth != nil
         authState = .unlocked(metadata)
         resetInactivityTimer()
         synchronizeCalendarIfEnabled()
     }
 
-    func unlock(password: String, domain: String) async throws {
+    /// `basicAuth` replaces the stored basic-auth login; it is saved once the server accepts it.
+    func unlock(password: String, domain: String, basicAuth: BasicAuthCredentials? = nil) async throws {
         if let retryAfter, retryAfter > .now { throw ValidationError("Bitte noch \(Int(retryAfter.timeIntervalSinceNow.rounded(.up))) Sekunden warten.") }
         try selectServer(domain)
-        let key: String
+        let credential: UnlockedCredential
         do {
-            key = try await vault.unlock(password: password, origin: server.url.absoluteString)
+            credential = try await vault.unlock(password: password, origin: server.url.absoluteString)
         } catch {
             failedUnlocks += 1
             if failedUnlocks >= 5 { retryAfter = .now.addingTimeInterval(30) }
             throw error
         }
         do {
-            await keyStore.set(key)
+            let effectiveBasicAuth = basicAuth ?? credential.basicAuth
+            await keyStore.set(credential.apiKey, basicAuth: effectiveBasicAuth)
             guard let me = try await client.request("auth/me") else { throw URLError(.badServerResponse) }
             failedUnlocks = 0
             retryAfter = nil
-            let metadata = try await vault.metadata() ?? VaultMetadata(prefix: String(key.prefix(12)), email: me["email"]?.string ?? "Admin", createdAt: .now)
-            authState = .unlocked(metadata)
+            let metadata = VaultMetadata(prefix: credential.metadata.prefix, email: credential.metadata.email, createdAt: credential.metadata.createdAt)
+            if let basicAuth, basicAuth != credential.basicAuth {
+                try? await vault.save(apiKey: credential.apiKey, basicAuth: basicAuth, password: password, metadata: metadata, origin: server.url.absoluteString)
+            }
+            usesBasicAuth = effectiveBasicAuth != nil
+            authState = .unlocked(VaultMetadata(
+                prefix: metadata.prefix,
+                email: me["email"]?.string ?? metadata.email,
+                createdAt: metadata.createdAt
+            ))
             resetInactivityTimer()
             synchronizeCalendarIfEnabled()
         } catch {
             await keyStore.clear()
             if let apiError = error as? APIError, apiError.status == 401 {
-                try? await vault.remove()
-                authState = .setup
+                try? await vault.remove(origin: server.url.absoluteString)
+                errorMessage = "Schlüssel widerrufen oder abgelaufen; bitte einen neuen Schlüssel eingeben."
             }
             throw error
         }
@@ -126,22 +134,25 @@ final class AppModel {
         queue = WorkQueue()
         references.clear()
         images.clear()
-        if case .unlocked(let metadata) = authState { authState = .locked(metadata) }
+        usesBasicAuth = false
+        authState = .signedOut
     }
 
-    func removeCredential() async throws {
+    /// Removes the key of `domain`, or of the current environment when unlocked.
+    func removeCredential(domain: String? = nil) async throws {
         lock()
-        try await vault.remove()
+        if let domain { try selectServer(domain) }
+        try await vault.remove(origin: server.url.absoluteString)
         failedUnlocks = 0
-        authState = .setup
+        retryAfter = nil
     }
 
     func changePassword(current: String, new: String) async throws {
         guard new.count >= 10 else { throw ValidationError("Das neue Passwort muss mindestens 10 Zeichen lang sein.") }
-        let key = try await vault.unlock(password: current, origin: server.url.absoluteString)
-        guard let metadata = try await vault.metadata() else { throw VaultError.noCredential }
+        let credential = try await vault.unlock(password: current, origin: server.url.absoluteString)
+        let metadata = credential.metadata
         let sanitizedMetadata = VaultMetadata(prefix: metadata.prefix, email: metadata.email, createdAt: metadata.createdAt)
-        try await vault.save(apiKey: key, password: new, metadata: sanitizedMetadata, origin: server.url.absoluteString)
+        try await vault.save(apiKey: credential.apiKey, basicAuth: credential.basicAuth, password: new, metadata: sanitizedMetadata, origin: server.url.absoluteString)
     }
 
     func userActivity() { if case .unlocked = authState { resetInactivityTimer() } }
