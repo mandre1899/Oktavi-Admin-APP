@@ -20,3 +20,17 @@ struct ServerAddressTests {
         #expect(throws: ValidationError.self) { try ServerAddress.parse("https://user:password@oktavi.de") }
     }
 }
+
+@Suite("Environment presets")
+struct ServerPresetTests {
+    @Test func presetsResolveToTheirFixedDomain() {
+        #expect(ServerPreset.production.resolvedDomain(custom: "ignored") == "oktavi.de")
+        #expect(ServerPreset.staging.resolvedDomain(custom: "") == "dev.oktavi.de")
+    }
+
+    @Test func customPresetUsesTypedDomainOnlyWhenValid() {
+        #expect(ServerPreset.custom.resolvedDomain(custom: "  localhost:8080 ") == "localhost:8080")
+        #expect(ServerPreset.custom.resolvedDomain(custom: "") == nil)
+        #expect(ServerPreset.custom.resolvedDomain(custom: "https://oktavi.de/admin") == nil)
+    }
+}
