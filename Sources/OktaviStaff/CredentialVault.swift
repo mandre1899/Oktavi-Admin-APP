@@ -6,6 +6,7 @@ struct VaultMetadata: Codable, Equatable, Sendable {
     let prefix: String
     let email: String
     let createdAt: Date
+    var origin: String? = nil
 }
 
 private struct VaultEnvelope: Codable {

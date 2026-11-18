@@ -10,6 +10,8 @@
     <string>OktaviStaff</string>
     <key>CFBundleIdentifier</key>
     <string>de.oktavi.staff</string>
+    <key>CFBundleIconFile</key>
+    <string>OktaviStaff.icns</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

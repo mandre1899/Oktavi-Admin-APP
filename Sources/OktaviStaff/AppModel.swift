@@ -2,18 +2,30 @@ import AppKit
 import Foundation
 import Observation
 
-enum AppEnvironment: String, CaseIterable, Identifiable, Codable {
-    case production, staging, local
-    var id: String { rawValue }
-    var title: String { switch self { case .production: "Produktion"; case .staging: "Staging"; case .local: "Lokal" } }
-    var baseURL: URL {
-        switch self {
-        case .production: URL(string: "https://oktavi.de/")!
-        case .staging: URL(string: "https://dev.oktavi.de/")!
-        case .local: URL(string: "https://localhost/")!
-        }
+struct ServerAddress: Equatable, Sendable {
+    let url: URL
+
+    var domain: String {
+        guard let host = url.host else { return url.absoluteString }
+        return url.port.map { "\(host):\($0)" } ?? host
     }
-    var requiredPrefix: String { self == .production ? "okt_live_" : "okt_test_" }
+
+    static func parse(_ input: String) throws -> ServerAddress {
+        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { throw ValidationError("Bitte eine Domain eingeben.") }
+        let candidate = value.contains("://") ? value : "https://\(value)"
+        guard var components = URLComponents(string: candidate),
+              ["http", "https"].contains(components.scheme?.lowercased() ?? ""),
+              components.host?.isEmpty == false,
+              components.user == nil, components.password == nil,
+              components.query == nil, components.fragment == nil,
+              components.path.isEmpty || components.path == "/" else {
+            throw ValidationError("Bitte nur eine gültige Domain eingeben, zum Beispiel dev.oktavi.de.")
+        }
+        components.path = "/"
+        guard let url = components.url else { throw ValidationError("Die Domain ist ungültig.") }
+        return ServerAddress(url: url)
+    }
 }
 
 enum AuthenticationState: Equatable { case loading, setup, locked(VaultMetadata), unlocked(VaultMetadata) }
@@ -24,9 +36,7 @@ final class AppModel {
     var errorMessage: String?
     var failedUnlocks = 0
     var retryAfter: Date?
-    var environment: AppEnvironment {
-        didSet { UserDefaults.standard.set(environment.rawValue, forKey: "environment") }
-    }
+    private(set) var server: ServerAddress
 
     let keyStore = MemoryKeyStore()
     let calendarSynchronizer = CalendarSynchronizer()
@@ -37,16 +47,24 @@ final class AppModel {
     private var loadedDataClearers: [UUID: @MainActor () -> Void] = [:]
 
     init(vault: CredentialVault = .shared) {
-        let saved = UserDefaults.standard.string(forKey: "environment").flatMap(AppEnvironment.init(rawValue:)) ?? .production
-        environment = saved
+        let fallback: String
+        switch UserDefaults.standard.string(forKey: "environment") {
+        case "staging": fallback = "https://dev.oktavi.de/"
+        case "local": fallback = "https://localhost/"
+        default: fallback = "https://oktavi.de/"
+        }
+        let saved = UserDefaults.standard.string(forKey: "serverOrigin") ?? fallback
+        server = (try? ServerAddress.parse(saved)) ?? ServerAddress(url: URL(string: "https://oktavi.de/")!)
         self.vault = vault
-        client = APIClient(baseURL: saved.baseURL, keyStore: keyStore)
+        client = APIClient(baseURL: server.url, keyStore: keyStore)
         Task { await loadState() }
     }
 
-    func selectEnvironment(_ value: AppEnvironment) {
-        environment = value
-        client = APIClient(baseURL: value.baseURL, keyStore: keyStore)
+    func selectServer(_ input: String) throws {
+        let selected = try ServerAddress.parse(input)
+        server = selected
+        client = APIClient(baseURL: selected.url, keyStore: keyStore)
+        UserDefaults.standard.set(selected.url.absoluteString, forKey: "serverOrigin")
     }
 
     func loadState() async {
@@ -59,9 +77,13 @@ final class AppModel {
         }
     }
 
-    func setup(apiKey: String, password: String) async throws {
+    func setup(apiKey: String, password: String, domain: String) async throws {
         guard password.count >= 10 else { throw ValidationError("Das App-Passwort muss mindestens 10 Zeichen lang sein.") }
-        guard apiKey.hasPrefix(environment.requiredPrefix) else { throw ValidationError("Der Schlüssel gehört nicht zu dieser Umgebung.") }
+        try selectServer(domain)
+        let host = server.url.host?.lowercased()
+        if host == "oktavi.de", !apiKey.hasPrefix("okt_live_") { throw ValidationError("Für oktavi.de ist ein Live-Schlüssel erforderlich.") }
+        if host == "dev.oktavi.de" || host == "localhost", !apiKey.hasPrefix("okt_test_") { throw ValidationError("Für diese Domain ist ein Test-Schlüssel erforderlich.") }
+        guard apiKey.hasPrefix("okt_live_") || apiKey.hasPrefix("okt_test_") else { throw ValidationError("Das Format des API-Schlüssels ist ungültig.") }
         let me = try await client.validate(key: apiKey)
         let roles = me["roles"]?.array?.compactMap(\.string) ?? []
         guard roles.contains("admin") else {
@@ -69,18 +91,19 @@ final class AppModel {
             throw APIError(status: 403, code: "forbidden", message: "Keine Admin-Berechtigung.")
         }
         let email = me["email"]?.string ?? "Admin"
-        let metadata = VaultMetadata(prefix: String(apiKey.prefix(12)), email: email, createdAt: .now)
-        try await vault.save(apiKey: apiKey, password: password, metadata: metadata, origin: environment.baseURL.absoluteString)
+        let metadata = VaultMetadata(prefix: String(apiKey.prefix(12)), email: email, createdAt: .now, origin: server.url.absoluteString)
+        try await vault.save(apiKey: apiKey, password: password, metadata: metadata, origin: server.url.absoluteString)
         authState = .unlocked(metadata)
         resetInactivityTimer()
         synchronizeCalendarIfEnabled()
     }
 
-    func unlock(password: String) async throws {
+    func unlock(password: String, domain: String) async throws {
         if let retryAfter, retryAfter > .now { throw ValidationError("Bitte noch \(Int(retryAfter.timeIntervalSinceNow.rounded(.up))) Sekunden warten.") }
+        try selectServer(domain)
         let key: String
         do {
-            key = try await vault.unlock(password: password, origin: environment.baseURL.absoluteString)
+            key = try await vault.unlock(password: password, origin: server.url.absoluteString)
         } catch {
             failedUnlocks += 1
             if failedUnlocks >= 5 { retryAfter = .now.addingTimeInterval(30) }
@@ -94,7 +117,7 @@ final class AppModel {
             }
             failedUnlocks = 0
             retryAfter = nil
-            let metadata = try await vault.metadata() ?? VaultMetadata(prefix: String(key.prefix(12)), email: me["email"]?.string ?? "Admin", createdAt: .now)
+            let metadata = try await vault.metadata() ?? VaultMetadata(prefix: String(key.prefix(12)), email: me["email"]?.string ?? "Admin", createdAt: .now, origin: server.url.absoluteString)
             authState = .unlocked(metadata)
             resetInactivityTimer()
             synchronizeCalendarIfEnabled()
@@ -124,9 +147,9 @@ final class AppModel {
 
     func changePassword(current: String, new: String) async throws {
         guard new.count >= 10 else { throw ValidationError("Das neue Passwort muss mindestens 10 Zeichen lang sein.") }
-        let key = try await vault.unlock(password: current, origin: environment.baseURL.absoluteString)
+        let key = try await vault.unlock(password: current, origin: server.url.absoluteString)
         guard let metadata = try await vault.metadata() else { throw VaultError.noCredential }
-        try await vault.save(apiKey: key, password: new, metadata: metadata, origin: environment.baseURL.absoluteString)
+        try await vault.save(apiKey: key, password: new, metadata: metadata, origin: server.url.absoluteString)
     }
 
     func userActivity() { if case .unlocked = authState { resetInactivityTimer() } }

@@ -16,6 +16,8 @@ sh scripts/package-app.sh
 open "dist/Oktavi Staff.app"
 ```
 
+The bundle uses the Oktavi brand icon from `Support/OktaviStaff.icns`.
+
 Run the unit tests:
 
 ```sh
